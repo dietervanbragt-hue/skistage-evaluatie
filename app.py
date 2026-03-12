@@ -67,6 +67,7 @@ def local_css():
 # 3. DATA FUNCTIES (MET CACHING ⚡)
 # ==========================================
 
+# 1. Cache de verbinding (zodat we niet telkens opnieuw inloggen bij Google)
 @st.cache_resource
 def get_gspread_client():
     creds_dict = dict(st.secrets["gcp_service_account"])
@@ -75,12 +76,15 @@ def get_gspread_client():
     client = gspread.authorize(creds)
     return client
 
+# Helper om de spreadsheet te pakken (ook gecacht)
 @st.cache_resource
 def get_spreadsheet():
     client = get_gspread_client()
     return client.open(SHEET_NAME)
 
 def init_data():
+    """Initialiseert tabbladen. Wordt maar 1x per sessie uitgevoerd."""
+    # We gebruiken session_state om te voorkomen dat we dit elke seconde checken
     if 'data_initialized' in st.session_state:
         return
 
@@ -99,6 +103,7 @@ def init_data():
             if cols:
                 ws.update([cols])
             
+            # Dummy data
             if tab_key == "students":
                 ws.append_row(["Voorbeeld", "Student", "6A", "Actief"])
             elif tab_key == "subjects":
@@ -107,6 +112,7 @@ def init_data():
     
     st.session_state.data_initialized = True
 
+# 2. Cache de DATA (ttl=600 betekent: onthoud dit 10 minuten)
 @st.cache_data(ttl=600)
 def load_data(key):
     sh = get_spreadsheet()
@@ -143,6 +149,9 @@ def save_data(key, df):
              df_to_save[col] = df_to_save[col].astype(str)
             
     ws.update([df_to_save.columns.values.tolist()] + df_to_save.values.tolist())
+    
+    # 3. BELANGRIJK: Omdat we data hebben aangepast, moeten we de cache wissen!
+    # Anders ziet de app nog steeds de oude data van 10 minuten geleden.
     st.cache_data.clear()
 
 def to_excel(df):
@@ -346,12 +355,6 @@ if page == "⛷️ Skileraar Omgeving":
 
         st.divider()
 
-        # --- NIEUW: Datumkiezer toegevoegd ---
-        st.subheader("📅 Datum van evaluatie")
-        eval_datum = st.date_input("Kies de datum waarvoor je punten wil invullen:", value=date.today(), max_value=date.today())
-        eval_datum_str = str(eval_datum)
-        st.write("") # Extra witregel voor de overzichtelijkheid
-
         df_stud = load_data("students")
         df_subj = load_data("subjects")
         df_eval = load_data("evaluations")
@@ -362,11 +365,11 @@ if page == "⛷️ Skileraar Omgeving":
             actieve_lln = df_stud[df_stud['status'] == 'Actief'].copy()
             actieve_lln['display'] = actieve_lln['voornaam'] + " " + actieve_lln['achternaam'] + " (" + actieve_lln['klas'] + ")"
             
-            # Pas hier controleren we op de GEKOZEN datum (eval_datum_str) i.p.v. vandaag
+            vandaag_str = str(date.today())
             reeds_gedaan = pd.DataFrame()
             if not df_eval.empty:
                 reeds_gedaan = df_eval[
-                    (df_eval['datum'] == eval_datum_str) & 
+                    (df_eval['datum'] == vandaag_str) & 
                     (df_eval['leraar'] == st.session_state.leraar_naam)
                 ]
             
@@ -377,12 +380,12 @@ if page == "⛷️ Skileraar Omgeving":
             beschikbare_lln = actieve_lln[~actieve_lln['display'].isin(namen_gedaan)]
             lln_lijst = sorted(beschikbare_lln['display'].tolist())
             
-            st.subheader(f"🔍 Wie wil je evalueren voor {eval_datum.strftime('%d-%m-%Y')}?")
+            st.subheader("🔍 Wie wil je evalueren?")
             
             if not lln_lijst:
-                st.success(f"🎉 Je hebt iedereen al geëvalueerd voor {eval_datum.strftime('%d-%m-%Y')}!")
+                st.success("🎉 Je bent klaar voor vandaag!")
             else:
-                gekozen = st.multiselect("Nog te doen op deze datum:", lln_lijst)
+                gekozen = st.multiselect("Nog te doen:", lln_lijst)
 
                 if gekozen:
                     with st.form("evaluatie_form"):
@@ -406,8 +409,7 @@ if page == "⛷️ Skileraar Omgeving":
                                 commentaar = resultaten.pop("opmerking")
                                 for vak, punt in resultaten.items():
                                     nieuwe_data.append({
-                                        # HIER: Opslaan onder de GEKOZEN datum
-                                        "datum": eval_datum_str,
+                                        "datum": str(date.today()),
                                         "tijdstip": tijd_str,
                                         "leraar": st.session_state.leraar_naam,
                                         "leerling_naam": l_naam,
@@ -421,7 +423,7 @@ if page == "⛷️ Skileraar Omgeving":
                             save_data("evaluations", df_eval)
                             msg = update_streak_and_points(st.session_state.leraar_naam)
                             st.balloons()
-                            st.success(f"Opgeslagen voor {eval_datum.strftime('%d-%m-%Y')}! {msg}")
+                            st.success(f"Opgeslagen! {msg}")
                             st.rerun()
 
 # ------------------------------------------
@@ -431,7 +433,7 @@ elif page == "⚙️ Beheerder Login":
     st.title("⚙️ Beheerder Dashboard")
     wachtwoord = st.text_input("Wachtwoord:", type="password")
     
-    if wachtwoord == "admin123":
+    if wachtwoord == "Westmalle2650":
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["👨‍🏫 Leraren", "👥 Leerlingen", "📚 Onderwerpen", "🏆 Leaderboard", "💾 Export"])
         
         with tab1:
