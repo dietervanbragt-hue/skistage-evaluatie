@@ -510,21 +510,15 @@ if page == "⛷️ Skileraar Omgeving":
                                     df_att = pd.concat([df_att, pd.DataFrame(nieuwe_att_data)], ignore_index=True)
                                     save_data("attendance", df_att)
                                 
-                                # --- NIEUW: AUTO-CLEANUP AFWEZIGEN ---
-                                # Controleer of een van deze opgeslagen leerlingen toevallig nog in
-                                # de 'afwezigen' lijst staat voor deze datum, en gooi ze eruit!
                                 df_afw = load_data("afwezigen")
                                 if not df_afw.empty:
                                     studenten_opgeslagen = list(opslag.keys())
                                     
-                                    # Behoud alleen de rijen waar het NIET (dezelfde datum EN opgeslagen leerling) is
                                     mask = ~((df_afw['datum'] == gekozen_datum_str) & (df_afw['leerling_naam'].isin(studenten_opgeslagen)))
                                     df_afw_schoon = df_afw[mask]
                                     
-                                    # Alleen opslaan als we daadwerkelijk iemand hebben verwijderd
                                     if len(df_afw) != len(df_afw_schoon):
                                         save_data("afwezigen", df_afw_schoon)
-                                # -------------------------------------
 
                                 msg = update_streak_and_points(st.session_state.leraar_naam, gekozen_datum, heeft_al_geëvalueerd)
                                 
