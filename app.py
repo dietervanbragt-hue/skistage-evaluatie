@@ -189,22 +189,19 @@ def generate_full_report():
 # 4. GAMIFICATION LOGICA
 # ==========================================
 def update_streak_and_points(leraar_naam, evaluatie_datum, reeds_geëvalueerd):
-    # Voorkom dubbele punten op dezelfde dag
     if reeds_geëvalueerd:
-        return "Leerlingen toegevoegd! (Je had al punten ontvangen voor deze datum)."
+        return "Je had al punten ontvangen voor deze datum."
 
     df = load_data("streaks")
     nu = datetime.now()
     vandaag = nu.date()
     uur = nu.hour
     
-    # Check of de leraar te laat is (datum ligt in het verleden)
     is_te_laat = evaluatie_datum < vandaag
     
     if is_te_laat:
-        basis = 5 # Troostprijs voor late evaluaties
+        basis = 5 
     else:
-        # Normale puntenverdeling voor evaluaties op de dag zelf
         if uur < 17: basis = 100
         elif uur < 19: basis = 75
         elif uur < 21: basis = 50
@@ -240,7 +237,6 @@ def update_streak_and_points(leraar_naam, evaluatie_datum, reeds_geëvalueerd):
                 df.at[idx, 'punten'] += totaal
                 bericht = f"🔥 STREAK DAG {nieuwe_streak}! +{totaal} punten!"
             elif laatste_datum == vandaag:
-                # Voor de veiligheid, mocht reeds_geëvalueerd falen
                 bericht = "Punten waren al toegekend voor vandaag."
             else:
                 df.at[idx, 'streak'] = 1
@@ -347,7 +343,6 @@ if page == "⛷️ Skileraar Omgeving":
             pts = user_data['punten'].values[0]
             strk = user_data['streak'].values[0]
         
-        # Eigen scorekaart
         st.markdown(f"""
         <div class="streak-card">
             <h3 style="margin:0; color:#e65100;">{st.session_state.leraar_naam}</h3>
@@ -355,15 +350,13 @@ if page == "⛷️ Skileraar Omgeving":
         </div>
         """, unsafe_allow_html=True)
         
-        # --- LEADERBOARD VOOR LERAREN ---
         with st.expander("🏆 Bekijk het Leaderboard"):
             if not df_streaks.empty:
                 df_leader = df_streaks[['leraar', 'punten', 'streak']].sort_values('punten', ascending=False).reset_index(drop=True)
-                df_leader.index += 1 # Laat de index beginnen bij 1 in plaats van 0 voor de ranglijst
+                df_leader.index += 1
                 st.dataframe(df_leader, use_container_width=True)
             else:
                 st.info("Nog geen scores beschikbaar.")
-        # ---------------------------------------
         
         if st.button("🔄 Uitloggen", key="logout_btn"):
             st.session_state.ingelogd = False
@@ -379,7 +372,6 @@ if page == "⛷️ Skileraar Omgeving":
         if df_stud.empty:
             st.warning("Nog geen leerlingen in het systeem.")
         else:
-            # --- DATUM KIEZEN ---
             st.subheader("📅 Evaluatie Datum")
             gekozen_datum = st.date_input("Voor welke dag wil je de leerlingen evalueren?", value=date.today(), max_value=date.today())
             gekozen_datum_str = str(gekozen_datum)
@@ -395,7 +387,6 @@ if page == "⛷️ Skileraar Omgeving":
                     (df_eval['leraar'] == st.session_state.leraar_naam)
                 ]
             
-            # Controleren of de leraar al eerder opsloeg voor deze datum
             heeft_al_geëvalueerd = not reeds_gedaan.empty
             
             namen_gedaan = []
@@ -421,10 +412,21 @@ if page == "⛷️ Skileraar Omgeving":
                             opslag[leerling_str] = {}
                             if not df_subj.empty:
                                 for vak in df_subj['onderwerp'].tolist():
-                                    opslag[leerling_str][vak] = st.slider(f"{vak}", 0, 10, 5, key=f"{leerling_str}_{vak}")
+                                    # OPLOSSING 1: Selectbox in plaats van een slider!
+                                    # Voorkomt scroll-fouten op de smartphone
+                                    opslag[leerling_str][vak] = st.selectbox(
+                                        f"{vak}", 
+                                        options=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 
+                                        index=5, 
+                                        key=f"{leerling_str}_{vak}"
+                                    )
                             opslag[leerling_str]["opmerking"] = st.text_input(f"Opmerking", key=f"opm_{leerling_str}")
                         
                         st.write("")
+                        
+                        # We plaatsen hier een 'placeholder' zodat we de melding BOVEN de knop kunnen injecteren
+                        melding_ruimte = st.empty()
+                        
                         if st.form_submit_button("✅ Opslaan"):
                             tijd_str = datetime.now().strftime("%H:%M")
                             nieuwe_data = []
@@ -447,12 +449,23 @@ if page == "⛷️ Skileraar Omgeving":
                             df_eval = pd.concat([df_eval, pd.DataFrame(nieuwe_data)], ignore_index=True)
                             save_data("evaluations", df_eval)
                             
-                            # Doorgeven aan de gamification of ze al punten hebben gekregen!
                             msg = update_streak_and_points(st.session_state.leraar_naam, gekozen_datum, heeft_al_geëvalueerd)
                             
+                            # OPLOSSING 2: Push notificatie + een groot groen tekstblok
+                            st.toast("Evaluaties succesvol opgeslagen!", icon="✅")
                             st.balloons()
-                            st.success(f"✅ Gelukt! De evaluaties zijn veilig opgeslagen.\n\n{msg}")
-                            time.sleep(3) # Wacht 3 seconden zodat de leraar de melding kan lezen
+                            
+                            # Vul de placeholder in met een enorm groen succesblok
+                            melding_ruimte.markdown(f"""
+                            <div style="background-color: #d1e7dd; color: #0f5132; padding: 20px; border-radius: 10px; border: 2px solid #198754; text-align: center; margin-bottom: 20px;">
+                                <h2>✅ Gelukt!</h2>
+                                <p style="font-size: 18px;">De evaluaties zijn opgeslagen.</p>
+                                <p style="font-size: 16px; font-weight: bold;">{msg}</p>
+                                <p style="font-size: 14px;"><i>Scherm ververst automatisch...</i></p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            time.sleep(3.5)
                             st.rerun()
 
 # ------------------------------------------
@@ -526,19 +539,16 @@ elif page == "⚙️ Beheerder Login":
             df_str = load_data("streaks")
             
             if not df_str.empty:
-                # We sorteren de lijst zodat de koploper bovenaan staat
                 df_str_sorted = df_str.sort_values('punten', ascending=False).reset_index(drop=True)
                 
-                # st.data_editor maakt de tabel interactief!
                 edited_df = st.data_editor(
                     df_str_sorted, 
                     use_container_width=True,
                     key="streak_editor",
-                    hide_index=True # Zorgt voor een nettere weergave zonder rij-nummers
+                    hide_index=True
                 )
                 
                 if st.button("💾 Wijzigingen Opslaan", key="save_streaks"):
-                    # Als de beheerder op opslaan klikt, sturen we de bewerkte tabel naar de sheet
                     save_data("streaks", edited_df)
                     st.success("De punten en streaks zijn succesvol bijgewerkt!")
                     st.rerun()
