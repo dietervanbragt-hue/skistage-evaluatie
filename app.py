@@ -165,55 +165,112 @@ def generate_full_report():
     df_stud = load_data("students")
     df_subj = load_data("subjects")
 
-    if df_stud.empty: return df_eval 
+  if df_stud.empty:
+            st.warning("Nog geen leerlingen in het systeem.")
+        else:
+            # --- NIEUW: DATUM KIEZEN ---
+            st.subheader("📅 Evaluatie Datum")
+            # De max_value zorgt ervoor dat ze geen evaluaties voor de toekomst kunnen maken
+            gekozen_datum = st.date_input("Voor welke dag wil je de leerlingen evalueren?", value=date.today(), max_value=date.today())
+            gekozen_datum_str = str(gekozen_datum)
+            st.write("---")
+            # ---------------------------
 
-    active_students = df_stud[df_stud['status'] == 'Actief'].copy()
-    active_students['display'] = active_students['voornaam'] + " " + active_students['achternaam'] + " (" + active_students['klas'] + ")"
+            actieve_lln = df_stud[df_stud['status'] == 'Actief'].copy()
+            actieve_lln['display'] = actieve_lln['voornaam'] + " " + actieve_lln['achternaam'] + " (" + actieve_lln['klas'] + ")"
+            
+            reeds_gedaan = pd.DataFrame()
+            if not df_eval.empty:
+                # We filteren nu op de GEKOZEN datum in plaats van altijd vandaag
+                reeds_gedaan = df_eval[
+                    (df_eval['datum'] == gekozen_datum_str) & 
+                    (df_eval['leraar'] == st.session_state.leraar_naam)
+                ]
+            
+            namen_gedaan = []
+            if not reeds_gedaan.empty:
+                namen_gedaan = reeds_gedaan['leerling_naam'].unique().tolist()
+            
+            beschikbare_lln = actieve_lln[~actieve_lln['display'].isin(namen_gedaan)]
+            lln_lijst = sorted(beschikbare_lln['display'].tolist())
+            
+            st.subheader(f"🔍 Wie wil je evalueren voor {gekozen_datum.strftime('%d-%m-%Y')}?")
+            
+            if not lln_lijst:
+                st.success(f"🎉 Je hebt iedereen al geëvalueerd voor deze dag!")
+            else:
+                gekozen = st.multiselect("Nog te doen:", lln_lijst)
 
-    dates = df_eval['datum'].unique()
-    if len(dates) == 0: return df_eval 
-
-    full_rows = []
-    for d in dates:
-        for _, stud in active_students.iterrows():
-            name = stud['display']
-            klas = stud['klas']
-            for sub in df_subj['onderwerp']:
-                full_rows.append({"datum": d, "leerling_naam": name, "klas": klas, "onderwerp": sub})
-    
-    df_template = pd.DataFrame(full_rows)
-    df_merged = pd.merge(df_template, df_eval, on=["datum", "leerling_naam", "onderwerp"], how="left", suffixes=("", "_old"))
-
-    if 'klas_old' in df_merged.columns:
-        df_merged['klas'] = df_merged['klas'].fillna(df_merged['klas_old'])
-        df_merged.drop(columns=['klas_old'], inplace=True)
-
-    df_merged['score'] = df_merged['score'].fillna("Geen deelname")
-    df_merged['leraar'] = df_merged['leraar'].fillna("Systeem")
-    df_merged['tijdstip'] = df_merged['tijdstip'].fillna("-")
-    df_merged['opmerking'] = df_merged['opmerking'].fillna("-")
-
-    return df_merged.sort_values(by=["datum", "klas", "leerling_naam", "onderwerp"])
+                if gekozen:
+                    with st.form("evaluatie_form"):
+                        st.write("Vul de scores in (0-10):")
+                        opslag = {}
+                        for leerling_str in gekozen:
+                            st.markdown(f"<div class='student-header'>👤 {leerling_str}</div>", unsafe_allow_html=True)
+                            opslag[leerling_str] = {}
+                            if not df_subj.empty:
+                                for vak in df_subj['onderwerp'].tolist():
+                                    opslag[leerling_str][vak] = st.slider(f"{vak}", 0, 10, 5, key=f"{leerling_str}_{vak}")
+                            opslag[leerling_str]["opmerking"] = st.text_input(f"Opmerking", key=f"opm_{leerling_str}")
+                        
+                        st.write("")
+                        if st.form_submit_button("✅ Opslaan"):
+                            tijd_str = datetime.now().strftime("%H:%M")
+                            nieuwe_data = []
+                            for l_naam, resultaten in opslag.items():
+                                try: klas_val = l_naam.split('(')[-1].replace(')', '')
+                                except: klas_val = "Onbekend"
+                                commentaar = resultaten.pop("opmerking")
+                                for vak, punt in resultaten.items():
+                                    nieuwe_data.append({
+                                        "datum": gekozen_datum_str, # <--- Hier slaan we nu de GEKOZEN datum op
+                                        "tijdstip": tijd_str,
+                                        "leraar": st.session_state.leraar_naam,
+                                        "leerling_naam": l_naam,
+                                        "klas": klas_val,
+                                        "onderwerp": vak,
+                                        "score": punt,
+                                        "opmerking": commentaar
+                                    })
+                            
+                            df_eval = pd.concat([df_eval, pd.DataFrame(nieuwe_data)], ignore_index=True)
+                            save_data("evaluations", df_eval)
+                            
+                            # --- NIEUW: We geven de gekozen datum mee aan de gamification functie ---
+                            msg = update_streak_and_points(st.session_state.leraar_naam, gekozen_datum)
+                            # ------------------------------------------------------------------------
+                            
+                            st.balloons()
+                            st.success(f"Opgeslagen! {msg}")
+                            st.rerun()
 
 # ==========================================
 # 4. GAMIFICATION LOGICA
 # ==========================================
-def update_streak_and_points(leraar_naam):
+def update_streak_and_points(leraar_naam, evaluatie_datum):
     df = load_data("streaks")
     nu = datetime.now()
     vandaag = nu.date()
     uur = nu.hour
     
-    if uur < 17: basis = 100
-    elif uur < 19: basis = 75
-    elif uur < 21: basis = 50
-    elif uur < 23: basis = 25
-    else: basis = 10
+    # Check of de leraar te laat is (datum ligt in het verleden)
+    is_te_laat = evaluatie_datum < vandaag
+    
+    if is_te_laat:
+        basis = 5 # Troostprijs voor late evaluaties
+    else:
+        # Normale puntenverdeling voor evaluaties op de dag zelf
+        if uur < 17: basis = 100
+        elif uur < 19: basis = 75
+        elif uur < 21: basis = 50
+        elif uur < 23: basis = 25
+        else: basis = 10
 
     bericht = ""
     
     if df.empty or leraar_naam not in df['leraar'].values:
-        nieuwe_rij = {"leraar": leraar_naam, "punten": basis, "laatste_datum": str(vandaag), "streak": 1}
+        # Eerste keer dat deze leraar iets invult
+        nieuwe_rij = {"leraar": leraar_naam, "punten": basis, "laatste_datum": str(vandaag), "streak": 0 if is_te_laat else 1}
         df = pd.concat([df, pd.DataFrame([nieuwe_rij])], ignore_index=True)
         bericht = f"🚀 Eerste evaluatie! +{basis} punten."
     else:
@@ -226,25 +283,30 @@ def update_streak_and_points(leraar_naam):
 
         huidige_streak = int(df.at[idx, 'streak'])
         
-        if laatste_datum == vandaag:
-            df.at[idx, 'punten'] += 5
-            bericht = f"Extra evaluatie! +5 punten."
-        elif laatste_datum == vandaag - timedelta(days=1):
-            nieuwe_streak = min(huidige_streak + 1, 7)
-            df.at[idx, 'streak'] = nieuwe_streak
-            df.at[idx, 'laatste_datum'] = str(vandaag)
-            totaal = basis * nieuwe_streak
-            df.at[idx, 'punten'] += totaal
-            bericht = f"🔥 STREAK DAG {nieuwe_streak}! +{totaal} punten!"
-        else:
-            df.at[idx, 'streak'] = 1
-            df.at[idx, 'laatste_datum'] = str(vandaag)
+        if is_te_laat:
+            # Bij een late evaluatie geven we enkel de kleine puntenbonus, de streak verandert niet.
             df.at[idx, 'punten'] += basis
-            bericht = f"Nieuwe start: +{basis} punten."
+            bericht = f"Late evaluatie opgeslagen! +{basis} punten."
+        else:
+            # Normale logica als het voor vandaag is
+            if laatste_datum == vandaag:
+                df.at[idx, 'punten'] += 5
+                bericht = f"Extra evaluatie voor vandaag! +5 punten."
+            elif laatste_datum == vandaag - timedelta(days=1):
+                nieuwe_streak = min(huidige_streak + 1, 7)
+                df.at[idx, 'streak'] = nieuwe_streak
+                df.at[idx, 'laatste_datum'] = str(vandaag)
+                totaal = basis * nieuwe_streak
+                df.at[idx, 'punten'] += totaal
+                bericht = f"🔥 STREAK DAG {nieuwe_streak}! +{totaal} punten!"
+            else:
+                df.at[idx, 'streak'] = 1
+                df.at[idx, 'laatste_datum'] = str(vandaag)
+                df.at[idx, 'punten'] += basis
+                bericht = f"Nieuwe start: +{basis} punten."
 
     save_data("streaks", df)
     return bericht
-
 # ==========================================
 # 5. DE APPLICATIE START
 # ==========================================
