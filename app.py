@@ -18,17 +18,18 @@ TABS = {
     "streaks": "streaks",
     "attendance": "attendance",
     "teachers": "teachers",
-    "settings": "settings" # --- NIEUW: Tabblad voor instellingen
+    "settings": "settings"
 }
 
 COLUMN_DEFS = {
     "students": ["voornaam", "achternaam", "klas", "status"],
     "subjects": ["onderwerp"],
-    "evaluations": ["datum", "tijdstip", "leraar", "leerling_naam", "klas", "onderwerp", "score", "opmerking"],
+    # --- GEWIJZIGD: Evaluaties in de breedte (gebundeld) ---
+    "evaluations": ["datum", "tijdstip", "leraar", "leerling_naam", "klas", "Bochten Techniek", "Houding", "Controle", "Inzet", "opmerking"],
     "attendance": ["datum", "leraar", "leerling_naam", "klas", "status"],
     "streaks": ["leraar", "punten", "laatste_datum", "streak"],
     "teachers": ["naam", "pin"],
-    "settings": ["sleutel", "waarde"] # --- NIEUW: Kolommen voor instellingen
+    "settings": ["sleutel", "waarde"]
 }
 
 # ==========================================
@@ -106,7 +107,6 @@ def init_data():
                 for sub in ["Bochten Techniek", "Houding", "Controle", "Inzet"]:
                     ws.append_row([sub])
             elif tab_key == "settings":
-                # Standaard datum = vandaag tot over een week
                 ws.append_row(["start_datum", str(date.today())])
                 ws.append_row(["eind_datum", str(date.today() + timedelta(days=7))])
     
@@ -156,16 +156,17 @@ def to_excel(df):
         df.to_excel(writer, index=False, sheet_name='Sheet1')
     return output.getvalue()
 
+# --- GEWIJZIGD: Rapport genereren voor het gebundelde systeem ---
 def generate_full_report():
     df_eval = load_data("evaluations")
     df_stud = load_data("students")
-    df_subj = load_data("subjects")
 
     if df_stud.empty: return df_eval 
 
     active_students = df_stud[df_stud['status'] == 'Actief'].copy()
     active_students['display'] = active_students['voornaam'] + " " + active_students['achternaam'] + " (" + active_students['klas'] + ")"
 
+    if df_eval.empty: return df_eval
     dates = df_eval['datum'].unique()
     if len(dates) == 0: return df_eval 
 
@@ -174,22 +175,27 @@ def generate_full_report():
         for _, stud in active_students.iterrows():
             name = stud['display']
             klas = stud['klas']
-            for sub in df_subj['onderwerp']:
-                full_rows.append({"datum": d, "leerling_naam": name, "klas": klas, "onderwerp": sub})
+            full_rows.append({"datum": d, "leerling_naam": name, "klas": klas})
     
     df_template = pd.DataFrame(full_rows)
-    df_merged = pd.merge(df_template, df_eval, on=["datum", "leerling_naam", "onderwerp"], how="left", suffixes=("", "_old"))
+    df_merged = pd.merge(df_template, df_eval, on=["datum", "leerling_naam"], how="left", suffixes=("", "_old"))
 
     if 'klas_old' in df_merged.columns:
         df_merged['klas'] = df_merged['klas'].fillna(df_merged['klas_old'])
         df_merged.drop(columns=['klas_old'], inplace=True)
 
-    df_merged['score'] = df_merged['score'].fillna("Geen deelname")
+    # Vul NaN (lege velden) op met standaardwaarden
+    base_cols = ["datum", "tijdstip", "leraar", "leerling_naam", "klas", "opmerking"]
+    subject_cols = [c for c in df_merged.columns if c not in base_cols]
+    
+    for c in subject_cols:
+        df_merged[c] = df_merged[c].fillna("Geen deelname")
+
     df_merged['leraar'] = df_merged['leraar'].fillna("Systeem")
     df_merged['tijdstip'] = df_merged['tijdstip'].fillna("-")
     df_merged['opmerking'] = df_merged['opmerking'].fillna("-")
 
-    return df_merged.sort_values(by=["datum", "klas", "leerling_naam", "onderwerp"])
+    return df_merged.sort_values(by=["datum", "klas", "leerling_naam"])
 
 # ==========================================
 # 4. GAMIFICATION LOGICA
@@ -378,7 +384,6 @@ if page == "⛷️ Skileraar Omgeving":
         if df_stud.empty:
             st.warning("Nog geen leerlingen in het systeem.")
         else:
-            # --- NIEUW: STAGE PERIODE OPHALEN & CONTROLEREN ---
             df_set = load_data("settings")
             start_str = str(date.today())
             eind_str = str(date.today() + timedelta(days=7))
@@ -393,7 +398,6 @@ if page == "⛷️ Skileraar Omgeving":
             try: eind_datum_stage = datetime.strptime(eind_str, "%Y-%m-%d").date()
             except: eind_datum_stage = date.today() + timedelta(days=7)
             
-            # Veiligheid voor tikfout van beheerder
             if eind_datum_stage < start_datum_stage:
                 eind_datum_stage = start_datum_stage
                 
@@ -404,7 +408,6 @@ if page == "⛷️ Skileraar Omgeving":
             else:
                 st.subheader("📅 Evaluatie Datum")
                 
-                # Bepaal limieten voor de datumkiezer
                 min_kiesbaar = start_datum_stage
                 max_kiesbaar = min(vandaag, eind_datum_stage)
                 standaard_datum = max_kiesbaar
@@ -417,7 +420,6 @@ if page == "⛷️ Skileraar Omgeving":
                 )
                 gekozen_datum_str = str(gekozen_datum)
                 st.write("---")
-                # ----------------------------------------------------
                 
                 actieve_lln = df_stud[df_stud['status'] == 'Actief'].copy()
                 actieve_lln['display'] = actieve_lln['voornaam'] + " " + actieve_lln['achternaam'] + " (" + actieve_lln['klas'] + ")"
@@ -468,21 +470,29 @@ if page == "⛷️ Skileraar Omgeving":
                             if st.form_submit_button("✅ Opslaan"):
                                 tijd_str = datetime.now().strftime("%H:%M")
                                 nieuwe_data = []
+                                
+                                # --- GEWIJZIGD: Eén rij (gebundeld) per leerling maken ---
                                 for l_naam, resultaten in opslag.items():
                                     try: klas_val = l_naam.split('(')[-1].replace(')', '')
                                     except: klas_val = "Onbekend"
                                     commentaar = resultaten.pop("opmerking")
+                                    
+                                    # We maken een brede rij aan met basisinformatie
+                                    leerling_rij = {
+                                        "datum": gekozen_datum_str,
+                                        "tijdstip": tijd_str,
+                                        "leraar": st.session_state.leraar_naam,
+                                        "leerling_naam": l_naam,
+                                        "klas": klas_val,
+                                        "opmerking": commentaar
+                                    }
+                                    
+                                    # Alle scores worden als extra kolommen aan deze ene rij toegevoegd
                                     for vak, punt in resultaten.items():
-                                        nieuwe_data.append({
-                                            "datum": gekozen_datum_str,
-                                            "tijdstip": tijd_str,
-                                            "leraar": st.session_state.leraar_naam,
-                                            "leerling_naam": l_naam,
-                                            "klas": klas_val,
-                                            "onderwerp": vak,
-                                            "score": punt,
-                                            "opmerking": commentaar
-                                        })
+                                        leerling_rij[vak] = punt
+                                        
+                                    nieuwe_data.append(leerling_rij)
+                                # --------------------------------------------------------
                                 
                                 df_eval = pd.concat([df_eval, pd.DataFrame(nieuwe_data)], ignore_index=True)
                                 save_data("evaluations", df_eval)
@@ -512,7 +522,6 @@ elif page == "⚙️ Beheerder Login":
     wachtwoord = st.text_input("Wachtwoord:", type="password")
     
     if wachtwoord == "Westmalle2650":
-        # --- NIEUW: tab6 Toegevoegd voor de instellingen ---
         tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["👨‍🏫 Leraren", "👥 Leerlingen", "📚 Onderwerpen", "🏆 Leaderboard", "💾 Export", "⚙️ Instellingen"])
         
         with tab1:
@@ -602,7 +611,6 @@ elif page == "⚙️ Beheerder Login":
                 df_att = load_data("attendance")
                 st.download_button("📝 Aanwezigheden (.xlsx)", to_excel(df_att), "aanw.xlsx", key="dl_att")
         
-        # --- NIEUW: TABBLAD 6 VOOR INSTELLINGEN ---
         with tab6:
             st.subheader("⚙️ Stage Periode Instellen")
             st.write("Bepaal hier tussen welke datums leraren evaluaties mogen invullen. Dit voorkomt dat ze vooraf of achteraf valsspelen voor extra punten.")
@@ -633,6 +641,5 @@ elif page == "⚙️ Beheerder Login":
                 save_data("settings", new_settings)
                 st.success("Stage periode succesvol opgeslagen! De kalender van de leraren is nu direct bijgewerkt.")
                 st.rerun()
-        # ------------------------------------------
     
     elif wachtwoord: st.error("Fout wachtwoord")
