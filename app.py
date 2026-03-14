@@ -17,7 +17,8 @@ TABS = {
     "subjects": "subjects",
     "streaks": "streaks",
     "attendance": "attendance",
-    "teachers": "teachers"
+    "teachers": "teachers",
+    "settings": "settings" # --- NIEUW: Tabblad voor instellingen
 }
 
 COLUMN_DEFS = {
@@ -26,7 +27,8 @@ COLUMN_DEFS = {
     "evaluations": ["datum", "tijdstip", "leraar", "leerling_naam", "klas", "onderwerp", "score", "opmerking"],
     "attendance": ["datum", "leraar", "leerling_naam", "klas", "status"],
     "streaks": ["leraar", "punten", "laatste_datum", "streak"],
-    "teachers": ["naam", "pin"]
+    "teachers": ["naam", "pin"],
+    "settings": ["sleutel", "waarde"] # --- NIEUW: Kolommen voor instellingen
 }
 
 # ==========================================
@@ -103,6 +105,10 @@ def init_data():
             elif tab_key == "subjects":
                 for sub in ["Bochten Techniek", "Houding", "Controle", "Inzet"]:
                     ws.append_row([sub])
+            elif tab_key == "settings":
+                # Standaard datum = vandaag tot over een week
+                ws.append_row(["start_datum", str(date.today())])
+                ws.append_row(["eind_datum", str(date.today() + timedelta(days=7))])
     
     st.session_state.data_initialized = True
 
@@ -372,101 +378,131 @@ if page == "⛷️ Skileraar Omgeving":
         if df_stud.empty:
             st.warning("Nog geen leerlingen in het systeem.")
         else:
-            st.subheader("📅 Evaluatie Datum")
-            gekozen_datum = st.date_input("Voor welke dag wil je de leerlingen evalueren?", value=date.today(), max_value=date.today())
-            gekozen_datum_str = str(gekozen_datum)
-            st.write("---")
+            # --- NIEUW: STAGE PERIODE OPHALEN & CONTROLEREN ---
+            df_set = load_data("settings")
+            start_str = str(date.today())
+            eind_str = str(date.today() + timedelta(days=7))
             
-            actieve_lln = df_stud[df_stud['status'] == 'Actief'].copy()
-            actieve_lln['display'] = actieve_lln['voornaam'] + " " + actieve_lln['achternaam'] + " (" + actieve_lln['klas'] + ")"
+            if not df_set.empty and "start_datum" in df_set['sleutel'].values:
+                start_str = df_set[df_set['sleutel'] == "start_datum"]['waarde'].values[0]
+            if not df_set.empty and "eind_datum" in df_set['sleutel'].values:
+                eind_str = df_set[df_set['sleutel'] == "eind_datum"]['waarde'].values[0]
             
-            reeds_gedaan = pd.DataFrame()
-            if not df_eval.empty:
-                reeds_gedaan = df_eval[
-                    (df_eval['datum'] == gekozen_datum_str) & 
-                    (df_eval['leraar'] == st.session_state.leraar_naam)
-                ]
+            try: start_datum_stage = datetime.strptime(start_str, "%Y-%m-%d").date()
+            except: start_datum_stage = date.today()
+            try: eind_datum_stage = datetime.strptime(eind_str, "%Y-%m-%d").date()
+            except: eind_datum_stage = date.today() + timedelta(days=7)
             
-            heeft_al_geëvalueerd = not reeds_gedaan.empty
+            # Veiligheid voor tikfout van beheerder
+            if eind_datum_stage < start_datum_stage:
+                eind_datum_stage = start_datum_stage
+                
+            vandaag = date.today()
             
-            namen_gedaan = []
-            if not reeds_gedaan.empty:
-                namen_gedaan = reeds_gedaan['leerling_naam'].unique().tolist()
-            
-            beschikbare_lln = actieve_lln[~actieve_lln['display'].isin(namen_gedaan)]
-            lln_lijst = sorted(beschikbare_lln['display'].tolist())
-            
-            st.subheader(f"🔍 Wie wil je evalueren voor {gekozen_datum.strftime('%d-%m-%Y')}?")
-            
-            if not lln_lijst:
-                st.success("🎉 Je hebt iedereen al geëvalueerd voor deze dag!")
+            if vandaag < start_datum_stage:
+                st.info(f"⛷️ Geduld! De skistage begint pas op **{start_datum_stage.strftime('%d-%m-%Y')}**. Tot dan kun je nog geen evaluaties invullen.")
             else:
-                gekozen = st.multiselect("Nog te doen:", lln_lijst)
+                st.subheader("📅 Evaluatie Datum")
+                
+                # Bepaal limieten voor de datumkiezer
+                min_kiesbaar = start_datum_stage
+                max_kiesbaar = min(vandaag, eind_datum_stage)
+                standaard_datum = max_kiesbaar
+                
+                gekozen_datum = st.date_input(
+                    "Voor welke dag wil je de leerlingen evalueren?", 
+                    value=standaard_datum, 
+                    min_value=min_kiesbaar, 
+                    max_value=max_kiesbaar
+                )
+                gekozen_datum_str = str(gekozen_datum)
+                st.write("---")
+                # ----------------------------------------------------
+                
+                actieve_lln = df_stud[df_stud['status'] == 'Actief'].copy()
+                actieve_lln['display'] = actieve_lln['voornaam'] + " " + actieve_lln['achternaam'] + " (" + actieve_lln['klas'] + ")"
+                
+                reeds_gedaan = pd.DataFrame()
+                if not df_eval.empty:
+                    reeds_gedaan = df_eval[
+                        (df_eval['datum'] == gekozen_datum_str) & 
+                        (df_eval['leraar'] == st.session_state.leraar_naam)
+                    ]
+                
+                heeft_al_geëvalueerd = not reeds_gedaan.empty
+                
+                namen_gedaan = []
+                if not reeds_gedaan.empty:
+                    namen_gedaan = reeds_gedaan['leerling_naam'].unique().tolist()
+                
+                beschikbare_lln = actieve_lln[~actieve_lln['display'].isin(namen_gedaan)]
+                lln_lijst = sorted(beschikbare_lln['display'].tolist())
+                
+                st.subheader(f"🔍 Wie wil je evalueren voor {gekozen_datum.strftime('%d-%m-%Y')}?")
+                
+                if not lln_lijst:
+                    st.success("🎉 Je hebt iedereen al geëvalueerd voor deze dag!")
+                else:
+                    gekozen = st.multiselect("Nog te doen:", lln_lijst)
 
-                if gekozen:
-                    with st.form("evaluatie_form"):
-                        st.write("Vul de scores in (0-10):")
-                        opslag = {}
-                        for leerling_str in gekozen:
-                            st.markdown(f"<div class='student-header'>👤 {leerling_str}</div>", unsafe_allow_html=True)
-                            opslag[leerling_str] = {}
-                            if not df_subj.empty:
-                                for vak in df_subj['onderwerp'].tolist():
-                                    # OPLOSSING 1: Selectbox in plaats van een slider!
-                                    # Voorkomt scroll-fouten op de smartphone
-                                    opslag[leerling_str][vak] = st.selectbox(
-                                        f"{vak}", 
-                                        options=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 
-                                        index=5, 
-                                        key=f"{leerling_str}_{vak}"
-                                    )
-                            opslag[leerling_str]["opmerking"] = st.text_input(f"Opmerking", key=f"opm_{leerling_str}")
-                        
-                        st.write("")
-                        
-                        # We plaatsen hier een 'placeholder' zodat we de melding BOVEN de knop kunnen injecteren
-                        melding_ruimte = st.empty()
-                        
-                        if st.form_submit_button("✅ Opslaan"):
-                            tijd_str = datetime.now().strftime("%H:%M")
-                            nieuwe_data = []
-                            for l_naam, resultaten in opslag.items():
-                                try: klas_val = l_naam.split('(')[-1].replace(')', '')
-                                except: klas_val = "Onbekend"
-                                commentaar = resultaten.pop("opmerking")
-                                for vak, punt in resultaten.items():
-                                    nieuwe_data.append({
-                                        "datum": gekozen_datum_str,
-                                        "tijdstip": tijd_str,
-                                        "leraar": st.session_state.leraar_naam,
-                                        "leerling_naam": l_naam,
-                                        "klas": klas_val,
-                                        "onderwerp": vak,
-                                        "score": punt,
-                                        "opmerking": commentaar
-                                    })
+                    if gekozen:
+                        with st.form("evaluatie_form"):
+                            st.write("Vul de scores in (0-10):")
+                            opslag = {}
+                            for leerling_str in gekozen:
+                                st.markdown(f"<div class='student-header'>👤 {leerling_str}</div>", unsafe_allow_html=True)
+                                opslag[leerling_str] = {}
+                                if not df_subj.empty:
+                                    for vak in df_subj['onderwerp'].tolist():
+                                        opslag[leerling_str][vak] = st.selectbox(
+                                            f"{vak}", 
+                                            options=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 
+                                            index=5, 
+                                            key=f"{leerling_str}_{vak}"
+                                        )
+                                opslag[leerling_str]["opmerking"] = st.text_input(f"Opmerking", key=f"opm_{leerling_str}")
                             
-                            df_eval = pd.concat([df_eval, pd.DataFrame(nieuwe_data)], ignore_index=True)
-                            save_data("evaluations", df_eval)
+                            st.write("")
+                            melding_ruimte = st.empty()
                             
-                            msg = update_streak_and_points(st.session_state.leraar_naam, gekozen_datum, heeft_al_geëvalueerd)
-                            
-                            # OPLOSSING 2: Push notificatie + een groot groen tekstblok
-                            st.toast("Evaluaties succesvol opgeslagen!", icon="✅")
-                            st.balloons()
-                            
-                            # Vul de placeholder in met een enorm groen succesblok
-                            melding_ruimte.markdown(f"""
-                            <div style="background-color: #d1e7dd; color: #0f5132; padding: 20px; border-radius: 10px; border: 2px solid #198754; text-align: center; margin-bottom: 20px;">
-                                <h2>✅ Gelukt!</h2>
-                                <p style="font-size: 18px;">De evaluaties zijn opgeslagen.</p>
-                                <p style="font-size: 16px; font-weight: bold;">{msg}</p>
-                                <p style="font-size: 14px;"><i>Scherm ververst automatisch...</i></p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                            time.sleep(3.5)
-                            st.rerun()
+                            if st.form_submit_button("✅ Opslaan"):
+                                tijd_str = datetime.now().strftime("%H:%M")
+                                nieuwe_data = []
+                                for l_naam, resultaten in opslag.items():
+                                    try: klas_val = l_naam.split('(')[-1].replace(')', '')
+                                    except: klas_val = "Onbekend"
+                                    commentaar = resultaten.pop("opmerking")
+                                    for vak, punt in resultaten.items():
+                                        nieuwe_data.append({
+                                            "datum": gekozen_datum_str,
+                                            "tijdstip": tijd_str,
+                                            "leraar": st.session_state.leraar_naam,
+                                            "leerling_naam": l_naam,
+                                            "klas": klas_val,
+                                            "onderwerp": vak,
+                                            "score": punt,
+                                            "opmerking": commentaar
+                                        })
+                                
+                                df_eval = pd.concat([df_eval, pd.DataFrame(nieuwe_data)], ignore_index=True)
+                                save_data("evaluations", df_eval)
+                                
+                                msg = update_streak_and_points(st.session_state.leraar_naam, gekozen_datum, heeft_al_geëvalueerd)
+                                
+                                st.toast("Evaluaties succesvol opgeslagen!", icon="✅")
+                                st.balloons()
+                                
+                                melding_ruimte.markdown(f"""
+                                <div style="background-color: #d1e7dd; color: #0f5132; padding: 20px; border-radius: 10px; border: 2px solid #198754; text-align: center; margin-bottom: 20px;">
+                                    <h2>✅ Gelukt!</h2>
+                                    <p style="font-size: 18px;">De evaluaties zijn opgeslagen.</p>
+                                    <p style="font-size: 16px; font-weight: bold;">{msg}</p>
+                                    <p style="font-size: 14px;"><i>Scherm ververst automatisch...</i></p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                time.sleep(3.5)
+                                st.rerun()
 
 # ------------------------------------------
 # PAGINA: BEHEERDER
@@ -476,7 +512,8 @@ elif page == "⚙️ Beheerder Login":
     wachtwoord = st.text_input("Wachtwoord:", type="password")
     
     if wachtwoord == "Westmalle2650":
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["👨‍🏫 Leraren", "👥 Leerlingen", "📚 Onderwerpen", "🏆 Leaderboard", "💾 Export"])
+        # --- NIEUW: tab6 Toegevoegd voor de instellingen ---
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["👨‍🏫 Leraren", "👥 Leerlingen", "📚 Onderwerpen", "🏆 Leaderboard", "💾 Export", "⚙️ Instellingen"])
         
         with tab1:
             st.subheader("Leraren")
@@ -564,5 +601,38 @@ elif page == "⚙️ Beheerder Login":
             with c2:
                 df_att = load_data("attendance")
                 st.download_button("📝 Aanwezigheden (.xlsx)", to_excel(df_att), "aanw.xlsx", key="dl_att")
+        
+        # --- NIEUW: TABBLAD 6 VOOR INSTELLINGEN ---
+        with tab6:
+            st.subheader("⚙️ Stage Periode Instellen")
+            st.write("Bepaal hier tussen welke datums leraren evaluaties mogen invullen. Dit voorkomt dat ze vooraf of achteraf valsspelen voor extra punten.")
+            
+            df_set = load_data("settings")
+            huidige_start = str(date.today())
+            huidige_eind = str(date.today() + timedelta(days=7))
+            
+            if not df_set.empty and "start_datum" in df_set['sleutel'].values:
+                huidige_start = df_set[df_set['sleutel'] == "start_datum"]['waarde'].values[0]
+            if not df_set.empty and "eind_datum" in df_set['sleutel'].values:
+                huidige_eind = df_set[df_set['sleutel'] == "eind_datum"]['waarde'].values[0]
+                
+            try: start_d = datetime.strptime(huidige_start, "%Y-%m-%d").date()
+            except: start_d = date.today()
+            try: eind_d = datetime.strptime(huidige_eind, "%Y-%m-%d").date()
+            except: eind_d = date.today() + timedelta(days=7)
+            
+            c1, c2 = st.columns(2)
+            nieuwe_start = c1.date_input("Startdatum Skistage", value=start_d)
+            nieuwe_eind = c2.date_input("Einddatum Skistage", value=eind_d)
+            
+            if st.button("💾 Datums Opslaan"):
+                new_settings = pd.DataFrame({
+                    "sleutel": ["start_datum", "eind_datum"],
+                    "waarde": [str(nieuwe_start), str(nieuwe_eind)]
+                })
+                save_data("settings", new_settings)
+                st.success("Stage periode succesvol opgeslagen! De kalender van de leraren is nu direct bijgewerkt.")
+                st.rerun()
+        # ------------------------------------------
     
     elif wachtwoord: st.error("Fout wachtwoord")
