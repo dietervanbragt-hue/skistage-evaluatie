@@ -18,8 +18,7 @@ TABS = {
     "streaks": "streaks",
     "attendance": "attendance",
     "teachers": "teachers",
-    "settings": "settings",
-    "afwezigen": "afwezigen" 
+    "settings": "settings" # --- NIEUW: Tabblad voor instellingen
 }
 
 COLUMN_DEFS = {
@@ -29,8 +28,7 @@ COLUMN_DEFS = {
     "attendance": ["datum", "leraar", "leerling_naam", "klas", "status"],
     "streaks": ["leraar", "punten", "laatste_datum", "streak"],
     "teachers": ["naam", "pin"],
-    "settings": ["sleutel", "waarde"],
-    "afwezigen": ["datum", "leerling_naam", "klas", "status", "gecontroleerd_op"] 
+    "settings": ["sleutel", "waarde"] # --- NIEUW: Kolommen voor instellingen
 }
 
 # ==========================================
@@ -108,6 +106,7 @@ def init_data():
                 for sub in ["Bochten Techniek", "Houding", "Controle", "Inzet"]:
                     ws.append_row([sub])
             elif tab_key == "settings":
+                # Standaard datum = vandaag tot over een week
                 ws.append_row(["start_datum", str(date.today())])
                 ws.append_row(["eind_datum", str(date.today() + timedelta(days=7))])
     
@@ -375,11 +374,11 @@ if page == "⛷️ Skileraar Omgeving":
         df_stud = load_data("students")
         df_subj = load_data("subjects")
         df_eval = load_data("evaluations")
-        df_att = load_data("attendance")
         
         if df_stud.empty:
             st.warning("Nog geen leerlingen in het systeem.")
         else:
+            # --- NIEUW: STAGE PERIODE OPHALEN & CONTROLEREN ---
             df_set = load_data("settings")
             start_str = str(date.today())
             eind_str = str(date.today() + timedelta(days=7))
@@ -394,6 +393,7 @@ if page == "⛷️ Skileraar Omgeving":
             try: eind_datum_stage = datetime.strptime(eind_str, "%Y-%m-%d").date()
             except: eind_datum_stage = date.today() + timedelta(days=7)
             
+            # Veiligheid voor tikfout van beheerder
             if eind_datum_stage < start_datum_stage:
                 eind_datum_stage = start_datum_stage
                 
@@ -404,6 +404,7 @@ if page == "⛷️ Skileraar Omgeving":
             else:
                 st.subheader("📅 Evaluatie Datum")
                 
+                # Bepaal limieten voor de datumkiezer
                 min_kiesbaar = start_datum_stage
                 max_kiesbaar = min(vandaag, eind_datum_stage)
                 standaard_datum = max_kiesbaar
@@ -416,21 +417,23 @@ if page == "⛷️ Skileraar Omgeving":
                 )
                 gekozen_datum_str = str(gekozen_datum)
                 st.write("---")
+                # ----------------------------------------------------
                 
                 actieve_lln = df_stud[df_stud['status'] == 'Actief'].copy()
                 actieve_lln['display'] = actieve_lln['voornaam'] + " " + actieve_lln['achternaam'] + " (" + actieve_lln['klas'] + ")"
                 
-                namen_gedaan = []
-                reeds_geëvalueerd = False
+                reeds_gedaan = pd.DataFrame()
                 if not df_eval.empty:
-                    gedaan_eval = df_eval[(df_eval['datum'] == gekozen_datum_str) & (df_eval['leraar'] == st.session_state.leraar_naam)]
-                    reeds_geëvalueerd = not gedaan_eval.empty
-                    namen_gedaan.extend(gedaan_eval['leerling_naam'].unique().tolist())
-                if not df_att.empty:
-                    gedaan_att = df_att[(df_att['datum'] == gekozen_datum_str) & (df_att['leraar'] == st.session_state.leraar_naam)]
-                    namen_gedaan.extend(gedaan_att['leerling_naam'].unique().tolist())
+                    reeds_gedaan = df_eval[
+                        (df_eval['datum'] == gekozen_datum_str) & 
+                        (df_eval['leraar'] == st.session_state.leraar_naam)
+                    ]
                 
-                namen_gedaan = list(set(namen_gedaan))
+                heeft_al_geëvalueerd = not reeds_gedaan.empty
+                
+                namen_gedaan = []
+                if not reeds_gedaan.empty:
+                    namen_gedaan = reeds_gedaan['leerling_naam'].unique().tolist()
                 
                 beschikbare_lln = actieve_lln[~actieve_lln['display'].isin(namen_gedaan)]
                 lln_lijst = sorted(beschikbare_lln['display'].tolist())
@@ -444,18 +447,11 @@ if page == "⛷️ Skileraar Omgeving":
 
                     if gekozen:
                         with st.form("evaluatie_form"):
-                            st.write("Geef de aanwezigheid en scores door:")
+                            st.write("Vul de scores in (0-10):")
                             opslag = {}
                             for leerling_str in gekozen:
                                 st.markdown(f"<div class='student-header'>👤 {leerling_str}</div>", unsafe_allow_html=True)
                                 opslag[leerling_str] = {}
-                                
-                                opslag[leerling_str]["status"] = st.selectbox(
-                                    "Aanwezigheid:", 
-                                    ["Aanwezig", "Ziek", "Gekwetst", "Andere groep"], 
-                                    key=f"status_{leerling_str}"
-                                )
-                                
                                 if not df_subj.empty:
                                     for vak in df_subj['onderwerp'].tolist():
                                         opslag[leerling_str][vak] = st.selectbox(
@@ -471,64 +467,35 @@ if page == "⛷️ Skileraar Omgeving":
                             
                             if st.form_submit_button("✅ Opslaan"):
                                 tijd_str = datetime.now().strftime("%H:%M")
-                                nieuwe_eval_data = []
-                                nieuwe_att_data = []
-                                
+                                nieuwe_data = []
                                 for l_naam, resultaten in opslag.items():
                                     try: klas_val = l_naam.split('(')[-1].replace(')', '')
                                     except: klas_val = "Onbekend"
-                                    
-                                    lln_status = resultaten.pop("status")
                                     commentaar = resultaten.pop("opmerking")
-                                    
-                                    if lln_status == "Aanwezig":
-                                        for vak, punt in resultaten.items():
-                                            nieuwe_eval_data.append({
-                                                "datum": gekozen_datum_str,
-                                                "tijdstip": tijd_str,
-                                                "leraar": st.session_state.leraar_naam,
-                                                "leerling_naam": l_naam,
-                                                "klas": klas_val,
-                                                "onderwerp": vak,
-                                                "score": punt,
-                                                "opmerking": commentaar
-                                            })
-                                    else:
-                                        nieuwe_att_data.append({
+                                    for vak, punt in resultaten.items():
+                                        nieuwe_data.append({
                                             "datum": gekozen_datum_str,
+                                            "tijdstip": tijd_str,
                                             "leraar": st.session_state.leraar_naam,
                                             "leerling_naam": l_naam,
                                             "klas": klas_val,
-                                            "status": f"{lln_status} ({commentaar})" if commentaar else lln_status
+                                            "onderwerp": vak,
+                                            "score": punt,
+                                            "opmerking": commentaar
                                         })
                                 
-                                if nieuwe_eval_data:
-                                    df_eval = pd.concat([df_eval, pd.DataFrame(nieuwe_eval_data)], ignore_index=True)
-                                    save_data("evaluations", df_eval)
+                                df_eval = pd.concat([df_eval, pd.DataFrame(nieuwe_data)], ignore_index=True)
+                                save_data("evaluations", df_eval)
                                 
-                                if nieuwe_att_data:
-                                    df_att = pd.concat([df_att, pd.DataFrame(nieuwe_att_data)], ignore_index=True)
-                                    save_data("attendance", df_att)
-                                
-                                df_afw = load_data("afwezigen")
-                                if not df_afw.empty:
-                                    studenten_opgeslagen = list(opslag.keys())
-                                    
-                                    mask = ~((df_afw['datum'] == gekozen_datum_str) & (df_afw['leerling_naam'].isin(studenten_opgeslagen)))
-                                    df_afw_schoon = df_afw[mask]
-                                    
-                                    if len(df_afw) != len(df_afw_schoon):
-                                        save_data("afwezigen", df_afw_schoon)
-
                                 msg = update_streak_and_points(st.session_state.leraar_naam, gekozen_datum, heeft_al_geëvalueerd)
                                 
-                                st.toast("Gegevens succesvol opgeslagen!", icon="✅")
+                                st.toast("Evaluaties succesvol opgeslagen!", icon="✅")
                                 st.balloons()
                                 
                                 melding_ruimte.markdown(f"""
                                 <div style="background-color: #d1e7dd; color: #0f5132; padding: 20px; border-radius: 10px; border: 2px solid #198754; text-align: center; margin-bottom: 20px;">
                                     <h2>✅ Gelukt!</h2>
-                                    <p style="font-size: 18px;">De gegevens zijn verwerkt.</p>
+                                    <p style="font-size: 18px;">De evaluaties zijn opgeslagen.</p>
                                     <p style="font-size: 16px; font-weight: bold;">{msg}</p>
                                     <p style="font-size: 14px;"><i>Scherm ververst automatisch...</i></p>
                                 </div>
@@ -545,7 +512,8 @@ elif page == "⚙️ Beheerder Login":
     wachtwoord = st.text_input("Wachtwoord:", type="password")
     
     if wachtwoord == "Westmalle2650":
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["👨‍🏫 Leraren", "👥 Leerlingen", "📚 Vakken", "🏆 Leaderboard", "💾 Export", "⚙️ Instellingen", "⚠️ Afwezigen"])
+        # --- NIEUW: tab6 Toegevoegd voor de instellingen ---
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["👨‍🏫 Leraren", "👥 Leerlingen", "📚 Onderwerpen", "🏆 Leaderboard", "💾 Export", "⚙️ Instellingen"])
         
         with tab1:
             st.subheader("Leraren")
@@ -604,10 +572,19 @@ elif page == "⚙️ Beheerder Login":
         with tab4:
             st.subheader("🏆 Leaderboard & Punten Beheer")
             st.write("Pas de punten of streaks direct in de tabel aan en klik op opslaan.")
+            
             df_str = load_data("streaks")
+            
             if not df_str.empty:
                 df_str_sorted = df_str.sort_values('punten', ascending=False).reset_index(drop=True)
-                edited_df = st.data_editor(df_str_sorted, use_container_width=True, key="streak_editor", hide_index=True)
+                
+                edited_df = st.data_editor(
+                    df_str_sorted, 
+                    use_container_width=True,
+                    key="streak_editor",
+                    hide_index=True
+                )
+                
                 if st.button("💾 Wijzigingen Opslaan", key="save_streaks"):
                     save_data("streaks", edited_df)
                     st.success("De punten en streaks zijn succesvol bijgewerkt!")
@@ -625,8 +602,11 @@ elif page == "⚙️ Beheerder Login":
                 df_att = load_data("attendance")
                 st.download_button("📝 Aanwezigheden (.xlsx)", to_excel(df_att), "aanw.xlsx", key="dl_att")
         
+        # --- NIEUW: TABBLAD 6 VOOR INSTELLINGEN ---
         with tab6:
             st.subheader("⚙️ Stage Periode Instellen")
+            st.write("Bepaal hier tussen welke datums leraren evaluaties mogen invullen. Dit voorkomt dat ze vooraf of achteraf valsspelen voor extra punten.")
+            
             df_set = load_data("settings")
             huidige_start = str(date.today())
             huidige_eind = str(date.today() + timedelta(days=7))
@@ -653,74 +633,6 @@ elif page == "⚙️ Beheerder Login":
                 save_data("settings", new_settings)
                 st.success("Stage periode succesvol opgeslagen! De kalender van de leraren is nu direct bijgewerkt.")
                 st.rerun()
-
-        with tab7:
-            st.subheader("⚠️ Controleer Niet-Geëvalueerde Leerlingen")
-            st.write("Kies een datum om te controleren welke leerlingen vandaag door **geen enkele leraar** zijn geëvalueerd of gemeld.")
-            
-            controle_datum = st.date_input("Datum om te controleren:", value=date.today(), key="controle_datum")
-            controle_datum_str = str(controle_datum)
-            
-            if st.button("🔍 Bereken en Toon Afwezigen"):
-                df_stud = load_data("students")
-                df_eval = load_data("evaluations")
-                df_att = load_data("attendance")
-                
-                if df_stud.empty:
-                    st.warning("Er zijn geen actieve leerlingen in het systeem.")
-                else:
-                    actieve_lln = df_stud[df_stud['status'] == 'Actief'].copy()
-                    actieve_lln['display'] = actieve_lln['voornaam'] + " " + actieve_lln['achternaam'] + " (" + actieve_lln['klas'] + ")"
-                    alle_namen = actieve_lln['display'].tolist()
-                    
-                    namen_eval = []
-                    if not df_eval.empty:
-                        namen_eval = df_eval[df_eval['datum'] == controle_datum_str]['leerling_naam'].tolist()
-                        
-                    namen_att = []
-                    if not df_att.empty:
-                        namen_att = df_att[df_att['datum'] == controle_datum_str]['leerling_naam'].tolist()
-                        
-                    namen_gehoord = list(set(namen_eval + namen_att))
-                    
-                    spook_leerlingen = [naam for naam in alle_namen if naam not in namen_gehoord]
-                    
-                    if not spook_leerlingen:
-                        st.success(f"Perfect! Iedereen is op {controle_datum_str} succesvol geëvalueerd of afgemeld.")
-                    else:
-                        st.error(f"Er zijn **{len(spook_leerlingen)}** leerlingen zonder gegevens op {controle_datum_str}:")
-                        
-                        nieuwe_afwezigen = []
-                        tijdstip_controle = datetime.now().strftime("%Y-%m-%d %H:%M")
-                        for naam in spook_leerlingen:
-                            klas_val = "Onbekend"
-                            if '(' in naam and ')' in naam:
-                                klas_val = naam.split('(')[-1].replace(')', '')
-                                
-                            nieuwe_afwezigen.append({
-                                "datum": controle_datum_str,
-                                "leerling_naam": naam,
-                                "klas": klas_val,
-                                "status": "Niet geëvalueerd",
-                                "gecontroleerd_op": tijdstip_controle
-                            })
-                            
-                        df_spook = pd.DataFrame(nieuwe_afwezigen)
-                        st.dataframe(df_spook[['leerling_naam', 'klas', 'status']], use_container_width=True)
-                        
-                        st.info("Sla deze lijst op in het 'afwezigen' tabblad in je Google Sheet voor je administratie.")
-                        st.session_state.te_bewaren_afwezigen = df_spook
-            
-            if 'te_bewaren_afwezigen' in st.session_state and not st.session_state.te_bewaren_afwezigen.empty:
-                if st.button("💾 Opslaan in 'afwezigen' sheet"):
-                    df_bestaande_afw = load_data("afwezigen")
-                    
-                    if not df_bestaande_afw.empty:
-                        df_bestaande_afw = df_bestaande_afw[df_bestaande_afw['datum'] != controle_datum_str]
-                    
-                    df_nieuwe_afw = pd.concat([df_bestaande_afw, st.session_state.te_bewaren_afwezigen], ignore_index=True)
-                    save_data("afwezigen", df_nieuwe_afw)
-                    st.session_state.te_bewaren_afwezigen = pd.DataFrame() 
-                    st.success(f"De afwezigen zijn succesvol opgeslagen in Google Sheets!")
+        # ------------------------------------------
     
     elif wachtwoord: st.error("Fout wachtwoord")
