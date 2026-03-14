@@ -519,11 +519,30 @@ elif page == "⚙️ Beheerder Login":
             st.table(df_sub)
 
         with tab4:
-            st.subheader("Leaderboard")
+            st.subheader("🏆 Leaderboard & Punten Beheer")
+            st.write("Pas de punten of streaks direct in de tabel aan en klik op opslaan.")
+            
             df_str = load_data("streaks")
+            
             if not df_str.empty:
-                st.dataframe(df_str.sort_values('punten', ascending=False), use_container_width=True)
-            else: st.info("Geen data.")
+                # We sorteren de lijst zodat de koploper bovenaan staat
+                df_str_sorted = df_str.sort_values('punten', ascending=False).reset_index(drop=True)
+                
+                # st.data_editor maakt de tabel interactief!
+                edited_df = st.data_editor(
+                    df_str_sorted, 
+                    use_container_width=True,
+                    key="streak_editor",
+                    hide_index=True # Zorgt voor een nettere weergave zonder rij-nummers
+                )
+                
+                if st.button("💾 Wijzigingen Opslaan", key="save_streaks"):
+                    # Als de beheerder op opslaan klikt, sturen we de bewerkte tabel naar de sheet
+                    save_data("streaks", edited_df)
+                    st.success("De punten en streaks zijn succesvol bijgewerkt!")
+                    st.rerun()
+            else: 
+                st.info("Nog geen gamification data beschikbaar.")
 
         with tab5:
             st.subheader("Downloads (Excel)")
