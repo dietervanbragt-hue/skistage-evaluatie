@@ -24,7 +24,6 @@ TABS = {
 COLUMN_DEFS = {
     "students": ["voornaam", "achternaam", "klas", "status"],
     "subjects": ["onderwerp"],
-    # --- GEWIJZIGD: Evaluaties in de breedte (gebundeld) ---
     "evaluations": ["datum", "tijdstip", "leraar", "leerling_naam", "klas", "Bochten Techniek", "Houding", "Controle", "Inzet", "opmerking"],
     "attendance": ["datum", "leraar", "leerling_naam", "klas", "status"],
     "streaks": ["leraar", "punten", "laatste_datum", "streak"],
@@ -134,6 +133,7 @@ def load_data(key):
         
     return df
 
+# --- GEWIJZIGD: Veilig opslaan zonder InvalidJSONError ---
 def save_data(key, df):
     sh = get_spreadsheet()
     ws = sh.worksheet(TABS[key])
@@ -141,14 +141,16 @@ def save_data(key, df):
     ws.clear()
     
     df_to_save = df.copy()
-    for col in df_to_save.columns:
-        if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
-             df_to_save[col] = df_to_save[col].astype(str)
-        elif df_to_save[col].dtype == 'object':
-             df_to_save[col] = df_to_save[col].astype(str)
+    
+    # 1. Vul lege waardes (NaN) op met een lege tekst ("")
+    df_to_save = df_to_save.fillna("")
+    
+    # 2. Zet alle data om naar standaard tekst zodat JSON/Google er nooit over struikelt
+    df_to_save = df_to_save.astype(str)
             
     ws.update([df_to_save.columns.values.tolist()] + df_to_save.values.tolist())
     st.cache_data.clear()
+# ---------------------------------------------------------
 
 def to_excel(df):
     output = io.BytesIO()
@@ -156,7 +158,6 @@ def to_excel(df):
         df.to_excel(writer, index=False, sheet_name='Sheet1')
     return output.getvalue()
 
-# --- GEWIJZIGD: Rapport genereren voor het gebundelde systeem ---
 def generate_full_report():
     df_eval = load_data("evaluations")
     df_stud = load_data("students")
@@ -184,7 +185,6 @@ def generate_full_report():
         df_merged['klas'] = df_merged['klas'].fillna(df_merged['klas_old'])
         df_merged.drop(columns=['klas_old'], inplace=True)
 
-    # Vul NaN (lege velden) op met standaardwaarden
     base_cols = ["datum", "tijdstip", "leraar", "leerling_naam", "klas", "opmerking"]
     subject_cols = [c for c in df_merged.columns if c not in base_cols]
     
@@ -471,13 +471,11 @@ if page == "⛷️ Skileraar Omgeving":
                                 tijd_str = datetime.now().strftime("%H:%M")
                                 nieuwe_data = []
                                 
-                                # --- GEWIJZIGD: Eén rij (gebundeld) per leerling maken ---
                                 for l_naam, resultaten in opslag.items():
                                     try: klas_val = l_naam.split('(')[-1].replace(')', '')
                                     except: klas_val = "Onbekend"
                                     commentaar = resultaten.pop("opmerking")
                                     
-                                    # We maken een brede rij aan met basisinformatie
                                     leerling_rij = {
                                         "datum": gekozen_datum_str,
                                         "tijdstip": tijd_str,
@@ -487,12 +485,10 @@ if page == "⛷️ Skileraar Omgeving":
                                         "opmerking": commentaar
                                     }
                                     
-                                    # Alle scores worden als extra kolommen aan deze ene rij toegevoegd
                                     for vak, punt in resultaten.items():
                                         leerling_rij[vak] = punt
                                         
                                     nieuwe_data.append(leerling_rij)
-                                # --------------------------------------------------------
                                 
                                 df_eval = pd.concat([df_eval, pd.DataFrame(nieuwe_data)], ignore_index=True)
                                 save_data("evaluations", df_eval)
