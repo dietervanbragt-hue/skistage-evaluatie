@@ -355,7 +355,7 @@ if page == "⛷️ Skileraar Omgeving":
         </div>
         """, unsafe_allow_html=True)
         
-        # --- NIEUW: LEADERBOARD VOOR LERAREN ---
+        # --- LEADERBOARD VOOR LERAREN ---
         with st.expander("🏆 Bekijk het Leaderboard"):
             if not df_streaks.empty:
                 df_leader = df_streaks[['leraar', 'punten', 'streak']].sort_values('punten', ascending=False).reset_index(drop=True)
@@ -451,7 +451,8 @@ if page == "⛷️ Skileraar Omgeving":
                             msg = update_streak_and_points(st.session_state.leraar_naam, gekozen_datum, heeft_al_geëvalueerd)
                             
                             st.balloons()
-                            st.success(msg)
+                            st.success(f"✅ Gelukt! De evaluaties zijn veilig opgeslagen.\n\n{msg}")
+                            time.sleep(3) # Wacht 3 seconden zodat de leraar de melding kan lezen
                             st.rerun()
 
 # ------------------------------------------
