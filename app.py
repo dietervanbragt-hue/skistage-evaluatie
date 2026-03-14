@@ -66,7 +66,6 @@ def local_css():
 # ==========================================
 # 3. DATA FUNCTIES (MET CACHING ⚡)
 # ==========================================
-
 @st.cache_resource
 def get_gspread_client():
     creds_dict = dict(st.secrets["gcp_service_account"])
@@ -189,7 +188,11 @@ def generate_full_report():
 # ==========================================
 # 4. GAMIFICATION LOGICA
 # ==========================================
-def update_streak_and_points(leraar_naam, evaluatie_datum):
+def update_streak_and_points(leraar_naam, evaluatie_datum, reeds_geëvalueerd):
+    # Voorkom dubbele punten op dezelfde dag
+    if reeds_geëvalueerd:
+        return "Leerlingen toegevoegd! (Je had al punten ontvangen voor deze datum)."
+
     df = load_data("streaks")
     nu = datetime.now()
     vandaag = nu.date()
@@ -211,8 +214,8 @@ def update_streak_and_points(leraar_naam, evaluatie_datum):
     bericht = ""
     
     if df.empty or leraar_naam not in df['leraar'].values:
-        # Eerste keer dat deze leraar iets invult
-        nieuwe_rij = {"leraar": leraar_naam, "punten": basis, "laatste_datum": str(vandaag), "streak": 0 if is_te_laat else 1}
+        laatste_d = str(vandaag) if not is_te_laat else "2000-01-01"
+        nieuwe_rij = {"leraar": leraar_naam, "punten": basis, "laatste_datum": laatste_d, "streak": 1 if not is_te_laat else 0}
         df = pd.concat([df, pd.DataFrame([nieuwe_rij])], ignore_index=True)
         bericht = f"🚀 Eerste evaluatie! +{basis} punten."
     else:
@@ -221,26 +224,24 @@ def update_streak_and_points(leraar_naam, evaluatie_datum):
         try:
             laatste_datum = datetime.strptime(laatste_datum_str, '%Y-%m-%d').date()
         except:
-            laatste_datum = vandaag
+            laatste_datum = date(2000, 1, 1)
 
         huidige_streak = int(df.at[idx, 'streak'])
         
         if is_te_laat:
-            # Bij een late evaluatie geven we enkel de kleine puntenbonus, de streak verandert niet.
             df.at[idx, 'punten'] += basis
             bericht = f"Late evaluatie opgeslagen! +{basis} punten."
         else:
-            # Normale logica als het voor vandaag is
-            if laatste_datum == vandaag:
-                df.at[idx, 'punten'] += 5
-                bericht = f"Extra evaluatie voor vandaag! +5 punten."
-            elif laatste_datum == vandaag - timedelta(days=1):
+            if laatste_datum == vandaag - timedelta(days=1):
                 nieuwe_streak = min(huidige_streak + 1, 7)
                 df.at[idx, 'streak'] = nieuwe_streak
                 df.at[idx, 'laatste_datum'] = str(vandaag)
                 totaal = basis * nieuwe_streak
                 df.at[idx, 'punten'] += totaal
                 bericht = f"🔥 STREAK DAG {nieuwe_streak}! +{totaal} punten!"
+            elif laatste_datum == vandaag:
+                # Voor de veiligheid, mocht reeds_geëvalueerd falen
+                bericht = "Punten waren al toegekend voor vandaag."
             else:
                 df.at[idx, 'streak'] = 1
                 df.at[idx, 'laatste_datum'] = str(vandaag)
@@ -346,12 +347,23 @@ if page == "⛷️ Skileraar Omgeving":
             pts = user_data['punten'].values[0]
             strk = user_data['streak'].values[0]
         
+        # Eigen scorekaart
         st.markdown(f"""
         <div class="streak-card">
             <h3 style="margin:0; color:#e65100;">{st.session_state.leraar_naam}</h3>
             <div style="font-size: 28px; margin-top:10px;">🔥 <b>{strk}/7</b> Dagen | 🏆 <b>{pts}</b> Ptn</div>
         </div>
         """, unsafe_allow_html=True)
+        
+        # --- NIEUW: LEADERBOARD VOOR LERAREN ---
+        with st.expander("🏆 Bekijk het Leaderboard"):
+            if not df_streaks.empty:
+                df_leader = df_streaks[['leraar', 'punten', 'streak']].sort_values('punten', ascending=False).reset_index(drop=True)
+                df_leader.index += 1 # Laat de index beginnen bij 1 in plaats van 0 voor de ranglijst
+                st.dataframe(df_leader, use_container_width=True)
+            else:
+                st.info("Nog geen scores beschikbaar.")
+        # ---------------------------------------
         
         if st.button("🔄 Uitloggen", key="logout_btn"):
             st.session_state.ingelogd = False
@@ -382,6 +394,9 @@ if page == "⛷️ Skileraar Omgeving":
                     (df_eval['datum'] == gekozen_datum_str) & 
                     (df_eval['leraar'] == st.session_state.leraar_naam)
                 ]
+            
+            # Controleren of de leraar al eerder opsloeg voor deze datum
+            heeft_al_geëvalueerd = not reeds_gedaan.empty
             
             namen_gedaan = []
             if not reeds_gedaan.empty:
@@ -432,11 +447,11 @@ if page == "⛷️ Skileraar Omgeving":
                             df_eval = pd.concat([df_eval, pd.DataFrame(nieuwe_data)], ignore_index=True)
                             save_data("evaluations", df_eval)
                             
-                            # BEIDE argumenten worden nu netjes doorgegeven!
-                            msg = update_streak_and_points(st.session_state.leraar_naam, gekozen_datum)
+                            # Doorgeven aan de gamification of ze al punten hebben gekregen!
+                            msg = update_streak_and_points(st.session_state.leraar_naam, gekozen_datum, heeft_al_geëvalueerd)
                             
                             st.balloons()
-                            st.success(f"Opgeslagen! {msg}")
+                            st.success(msg)
                             st.rerun()
 
 # ------------------------------------------
