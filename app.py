@@ -18,7 +18,8 @@ TABS = {
     "streaks": "streaks",
     "attendance": "attendance",
     "teachers": "teachers",
-    "settings": "settings"
+    "settings": "settings",
+    "hidden_students": "hidden_students"  # <-- NIEUW: Om verborgen leerlingen in de cloud op te slaan
 }
 
 COLUMN_DEFS = {
@@ -28,7 +29,8 @@ COLUMN_DEFS = {
     "attendance": ["datum", "leraar", "leerling_naam", "klas", "status"],
     "streaks": ["leraar", "punten", "laatste_datum", "streak"],
     "teachers": ["naam", "pin"],
-    "settings": ["sleutel", "waarde"]
+    "settings": ["sleutel", "waarde"],
+    "hidden_students": ["leraar", "student"] # <-- NIEUW
 }
 
 # ==========================================
@@ -133,7 +135,6 @@ def load_data(key):
         
     return df
 
-# --- GEWIJZIGD: Veilig opslaan zonder InvalidJSONError ---
 def save_data(key, df):
     sh = get_spreadsheet()
     ws = sh.worksheet(TABS[key])
@@ -141,16 +142,11 @@ def save_data(key, df):
     ws.clear()
     
     df_to_save = df.copy()
-    
-    # 1. Vul lege waardes (NaN) op met een lege tekst ("")
     df_to_save = df_to_save.fillna("")
-    
-    # 2. Zet alle data om naar standaard tekst zodat JSON/Google er nooit over struikelt
     df_to_save = df_to_save.astype(str)
             
     ws.update([df_to_save.columns.values.tolist()] + df_to_save.values.tolist())
     st.cache_data.clear()
-# ---------------------------------------------------------
 
 def to_excel(df):
     output = io.BytesIO()
@@ -380,6 +376,7 @@ if page == "⛷️ Skileraar Omgeving":
         df_stud = load_data("students")
         df_subj = load_data("subjects")
         df_eval = load_data("evaluations")
+        df_hidden = load_data("hidden_students")
         
         if df_stud.empty:
             st.warning("Nog geen leerlingen in het systeem.")
@@ -420,7 +417,37 @@ if page == "⛷️ Skileraar Omgeving":
                 )
                 gekozen_datum_str = str(gekozen_datum)
                 st.write("---")
+
+                # ==========================================
+                # HET SLIMME GROEP-SYSTEEM
+                # ==========================================
+                # 1. Bepaal mijn historische groep
+                mijn_historiek = []
+                if not df_eval.empty:
+                    mijn_data = df_eval[df_eval['leraar'] == st.session_state.leraar_naam]
+                    mijn_historiek = mijn_data['leerling_naam'].dropna().unique().tolist()
+                    
+                # 2. Bepaal verborgen leerlingen
+                verborgen = []
+                if not df_hidden.empty:
+                    verborgen = df_hidden[df_hidden['leraar'] == st.session_state.leraar_naam]['student'].tolist()
+                    
+                # 3. Mijn definitieve, actuele groep
+                mijn_groep = sorted([s for s in mijn_historiek if s not in verborgen])
                 
+                if mijn_groep:
+                    with st.expander("⚙️ Groep Beheren (Leerling verbergen)"):
+                        st.write("Is een leerling definitief uit je groep gegaan of overgeplaatst? Haal deze dan hier uit je vaste lijst.")
+                        te_verbergen = st.selectbox("Kies leerling om te verwijderen:", ["Kies een leerling..."] + mijn_groep)
+                        if st.button("Verwijder uit mijn groep 🙈") and te_verbergen != "Kies een leerling...":
+                            nieuwe_verborgen = {"leraar": st.session_state.leraar_naam, "student": te_verbergen}
+                            df_hidden = pd.concat([df_hidden, pd.DataFrame([nieuwe_verborgen])], ignore_index=True)
+                            save_data("hidden_students", df_hidden)
+                            st.success(f"{te_verbergen} is succesvol uit je groep gehaald!")
+                            time.sleep(1.5)
+                            st.rerun()
+                    st.write("---")
+
                 actieve_lln = df_stud[df_stud['status'] == 'Actief'].copy()
                 actieve_lln['display'] = actieve_lln['voornaam'] + " " + actieve_lln['achternaam'] + " (" + actieve_lln['klas'] + ")"
                 
@@ -437,78 +464,92 @@ if page == "⛷️ Skileraar Omgeving":
                 if not reeds_gedaan.empty:
                     namen_gedaan = reeds_gedaan['leerling_naam'].unique().tolist()
                 
-                beschikbare_lln = actieve_lln[~actieve_lln['display'].isin(namen_gedaan)]
-                lln_lijst = sorted(beschikbare_lln['display'].tolist())
+                nog_te_doen_in_mijn_groep = sorted([s for s in mijn_groep if s not in namen_gedaan])
+                alle_actieve_display = actieve_lln['display'].tolist()
+                andere_lln = sorted([s for s in alle_actieve_display if s not in mijn_groep and s not in namen_gedaan and s not in verborgen])
                 
                 st.subheader(f"🔍 Wie wil je evalueren voor {gekozen_datum.strftime('%d-%m-%Y')}?")
                 
-                if not lln_lijst:
-                    st.success("🎉 Je hebt iedereen al geëvalueerd voor deze dag!")
-                else:
-                    gekozen = st.multiselect("Nog te doen:", lln_lijst)
+                gekozen_nieuw = []
+                gekozen_groep = []
 
-                    if gekozen:
-                        with st.form("evaluatie_form"):
-                            st.write("Vul de scores in (0-10):")
-                            opslag = {}
-                            for leerling_str in gekozen:
-                                st.markdown(f"<div class='student-header'>👤 {leerling_str}</div>", unsafe_allow_html=True)
-                                opslag[leerling_str] = {}
-                                if not df_subj.empty:
-                                    for vak in df_subj['onderwerp'].tolist():
-                                        opslag[leerling_str][vak] = st.selectbox(
-                                            f"{vak}", 
-                                            options=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 
-                                            index=5, 
-                                            key=f"{leerling_str}_{vak}"
-                                        )
-                                opslag[leerling_str]["opmerking"] = st.text_input(f"Opmerking", key=f"opm_{leerling_str}")
+                if not mijn_groep:
+                    st.info("👋 Welkom! Omdat je nog niet eerder geëvalueerd hebt, is je vaste groep nog leeg. Selecteer hieronder de leerlingen van jouw groepje uit de volledige lijst. Vanaf je volgende evaluatie selecteert het systeem deze automatisch voor jou!")
+                    gekozen_nieuw = st.multiselect("Kies je leerlingen uit de databank:", andere_lln)
+                else:
+                    if nog_te_doen_in_mijn_groep:
+                        gekozen_groep = st.multiselect("Je vaste groep (vink afwezigen uit met het kruisje):", nog_te_doen_in_mijn_groep, default=nog_te_doen_in_mijn_groep)
+                    else:
+                        st.success("🎉 Je hebt je hele vaste groep al geëvalueerd voor deze dag!")
+                        
+                    with st.expander("➕ Extra leerling toevoegen (bijv. bij wissel van niveau)"):
+                        st.write("Kies hier een nieuwe leerling uit de volledige lijst. Na het opslaan van de evaluatie, zit deze leerling permanent in je vaste groep.")
+                        gekozen_nieuw = st.multiselect("Kies extra leerlingen:", andere_lln)
+                        
+                gekozen = list(set(gekozen_groep + gekozen_nieuw))
+
+                if gekozen:
+                    with st.form("evaluatie_form"):
+                        st.write("Vul de scores in (0-10):")
+                        opslag = {}
+                        for leerling_str in gekozen:
+                            st.markdown(f"<div class='student-header'>👤 {leerling_str}</div>", unsafe_allow_html=True)
+                            opslag[leerling_str] = {}
+                            if not df_subj.empty:
+                                for vak in df_subj['onderwerp'].tolist():
+                                    opslag[leerling_str][vak] = st.selectbox(
+                                        f"{vak}", 
+                                        options=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 
+                                        index=5, 
+                                        key=f"{leerling_str}_{vak}"
+                                    )
+                            opslag[leerling_str]["opmerking"] = st.text_input(f"Opmerking", key=f"opm_{leerling_str}")
+                        
+                        st.write("")
+                        melding_ruimte = st.empty()
+                        
+                        if st.form_submit_button("✅ Opslaan"):
+                            tijd_str = datetime.now().strftime("%H:%M")
+                            nieuwe_data = []
                             
-                            st.write("")
-                            melding_ruimte = st.empty()
+                            for l_naam, resultaten in opslag.items():
+                                try: klas_val = l_naam.split('(')[-1].replace(')', '')
+                                except: klas_val = "Onbekend"
+                                commentaar = resultaten.pop("opmerking")
+                                
+                                leerling_rij = {
+                                    "datum": gekozen_datum_str,
+                                    "tijdstip": tijd_str,
+                                    "leraar": st.session_state.leraar_naam,
+                                    "leerling_naam": l_naam,
+                                    "klas": klas_val,
+                                    "opmerking": commentaar
+                                }
+                                
+                                for vak, punt in resultaten.items():
+                                    leerling_rij[vak] = punt
+                                    
+                                nieuwe_data.append(leerling_rij)
                             
-                            if st.form_submit_button("✅ Opslaan"):
-                                tijd_str = datetime.now().strftime("%H:%M")
-                                nieuwe_data = []
-                                
-                                for l_naam, resultaten in opslag.items():
-                                    try: klas_val = l_naam.split('(')[-1].replace(')', '')
-                                    except: klas_val = "Onbekend"
-                                    commentaar = resultaten.pop("opmerking")
-                                    
-                                    leerling_rij = {
-                                        "datum": gekozen_datum_str,
-                                        "tijdstip": tijd_str,
-                                        "leraar": st.session_state.leraar_naam,
-                                        "leerling_naam": l_naam,
-                                        "klas": klas_val,
-                                        "opmerking": commentaar
-                                    }
-                                    
-                                    for vak, punt in resultaten.items():
-                                        leerling_rij[vak] = punt
-                                        
-                                    nieuwe_data.append(leerling_rij)
-                                
-                                df_eval = pd.concat([df_eval, pd.DataFrame(nieuwe_data)], ignore_index=True)
-                                save_data("evaluations", df_eval)
-                                
-                                msg = update_streak_and_points(st.session_state.leraar_naam, gekozen_datum, heeft_al_geëvalueerd)
-                                
-                                st.toast("Evaluaties succesvol opgeslagen!", icon="✅")
-                                st.balloons()
-                                
-                                melding_ruimte.markdown(f"""
-                                <div style="background-color: #d1e7dd; color: #0f5132; padding: 20px; border-radius: 10px; border: 2px solid #198754; text-align: center; margin-bottom: 20px;">
-                                    <h2>✅ Gelukt!</h2>
-                                    <p style="font-size: 18px;">De evaluaties zijn opgeslagen.</p>
-                                    <p style="font-size: 16px; font-weight: bold;">{msg}</p>
-                                    <p style="font-size: 14px;"><i>Scherm ververst automatisch...</i></p>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                                time.sleep(3.5)
-                                st.rerun()
+                            df_eval = pd.concat([df_eval, pd.DataFrame(nieuwe_data)], ignore_index=True)
+                            save_data("evaluations", df_eval)
+                            
+                            msg = update_streak_and_points(st.session_state.leraar_naam, gekozen_datum, heeft_al_geëvalueerd)
+                            
+                            st.toast("Evaluaties succesvol opgeslagen!", icon="✅")
+                            st.balloons()
+                            
+                            melding_ruimte.markdown(f"""
+                            <div style="background-color: #d1e7dd; color: #0f5132; padding: 20px; border-radius: 10px; border: 2px solid #198754; text-align: center; margin-bottom: 20px;">
+                                <h2>✅ Gelukt!</h2>
+                                <p style="font-size: 18px;">De evaluaties zijn opgeslagen.</p>
+                                <p style="font-size: 16px; font-weight: bold;">{msg}</p>
+                                <p style="font-size: 14px;"><i>Scherm ververst automatisch...</i></p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            time.sleep(3.5)
+                            st.rerun()
 
 # ------------------------------------------
 # PAGINA: BEHEERDER
